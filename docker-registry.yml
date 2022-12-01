@@ -1,0 +1,70 @@
+---
+- name: run ec2
+  hosts: localhost
+  roles:
+    - role: ec2
+- name: registry
+  hosts: ec2hosts
+  become: true
+  roles:  
+    - role: docker
+      become: yes
+      vars:
+        requried_packages:
+          - python3-pip
+          - python3-setuptools
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg-agent
+          - software-properties-common
+        docker_engines:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+    - role: CA
+      become: yes     
+  tasks:
+    - name: Create a crt directory if it does not exist
+      ansible.builtin.file:
+        path: "{{ path_to_auth }}"
+        state: directory
+    - name: Install apache httpd  (state=present is optional)
+      apt:
+        name: apache2-utils
+        state: present
+    - name: pip install passlib
+      pip:
+        name: passlib
+    - name: pip install bcrypt
+      pip:
+        name: bcrypt       
+    - name: Add a user to a password file and ensure permissions are set
+      community.general.htpasswd:
+        path: "{{ path_to_auth }}/{{ auth_file_name }}"
+        crypt_scheme: bcrypt
+        name: '{{ htpasswd_username }}'
+        password: '{{ htpasswd_password }}'
+    - name: Restart service docker
+      ansible.builtin.service:
+        name: docker
+        state: restarted
+    - name: start registry Server
+      community.docker.docker_container:
+        name: registry
+        image: registry:2
+        state: started
+        detach: yes
+        restart_policy: always
+        volumes: 
+          - "{{ path_to_crt }}:{{ container_tls_certificate_path }}"
+          - "{{ path_to_auth }}:{{ container_auth_path }}"
+        env:
+          REGISTRY_HTTP_ADDR: "{{ registry_address }}"
+          REGISTRY_HTTP_TLS_CERTIFICATE: "{{ container_tls_certificate_path }}/{{ CA_key_name }}.crt"
+          REGISTRY_HTTP_TLS_KEY: "{{ container_tls_certificate_path }}/{{ CA_key_name }}.key"
+          REGISTRY_AUTH_HTPASSWD_PATH: "{{ container_auth_path }}/{{ auth_file_name }}"
+          REGISTRY_AUTH: "{{ auth_file_name }}"
+          REGISTRY_AUTH_HTPASSWD_REALM: "Registry Realm"
+        ports:
+          - "{{ host_port }}:{{ container_port }}"

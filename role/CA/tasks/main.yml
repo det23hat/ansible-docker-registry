@@ -1,0 +1,34 @@
+---
+  - name: Create a crt directory if it does not exist
+    ansible.builtin.file:
+      path: "{{ path_to_crt }}"
+      state: directory
+  - name: create CA key
+    community.crypto.openssl_privatekey:
+      path: "{{ path_to_crt }}/{{ CA_key_name }}.key"
+  - name: create the CA CSR
+    community.crypto.openssl_csr:
+      path: "{{ path_to_crt }}/{{ CA_key_name }}.csr"
+      privatekey_path: "{{ path_to_crt }}/{{ CA_key_name }}.key"
+      common_name: "{{ domain_name }}"
+  - name: sign the CA CSR
+    community.crypto.x509_certificate:
+      path: "{{ path_to_crt }}/{{ CA_key_name }}.crt"
+      csr_path: "{{ path_to_crt }}/{{ CA_key_name }}.csr"
+      privatekey_path: "{{ path_to_crt }}/{{ CA_key_name }}.key"
+      provider: selfsigned
+  - name: Change key file permissions
+    ansible.builtin.file:
+      path: "{{ path_to_crt }}/{{ CA_key_name }}.key"
+      mode: '400'
+  - name: trust the certificate at the OS level
+    ansible.builtin.copy:
+      src:  "{{ path_to_crt }}/{{ CA_key_name }}.crt"
+      dest: /usr/local/share/ca-certificates/myregistrydomain.com.crt
+      remote_src: yes
+  - name: update certificates
+    command: update-ca-certificates
+    
+    
+    
+    

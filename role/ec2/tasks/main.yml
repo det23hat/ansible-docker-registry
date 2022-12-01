@@ -1,0 +1,105 @@
+---
+  - name: Generate an OpenSSH keypair with the default values (4096 bits, rsa)
+    community.crypto.openssh_keypair:
+      path: "{{ ssh_key_file }}"
+    register: ssh_path
+  - name: print ssh key path
+    ansible.builtin.debug:
+      msg: "{{ ssh_path }}"
+  - name: Change key file permissions
+    ansible.builtin.file:
+      path: "{{ ssh_path.filename }}"
+      mode: '600'
+  - name: create key pair using key_material obtained using 'file' lookup plugin
+    amazon.aws.ec2_key:
+      name: "{{ ec2_key_name }}"
+      key_material: "{{ lookup('file', '{{ ssh_path.filename }}.pub') }}"    
+  - name: Facts about default VPC
+    amazon.aws.ec2_vpc_net_info:
+      filters:
+        isDefault: "true"
+    register: vpc_net_find
+  - name: print default VPC info
+    ansible.builtin.debug:
+      msg: "{{ vpc_net_find }}"
+  - name: Facts about default VPC subnet
+    amazon.aws.ec2_vpc_subnet_info:
+      filters:
+        vpc-id: "{{vpc_net_find.vpcs[0].vpc_id}}"
+    register: vpc_subnet_find
+  - name: print default subnet info
+    ansible.builtin.debug:
+      msg: "{{ vpc_subnet_find }}"
+  - name: choice ami
+    amazon.aws.ec2_ami_info:
+      image_ids: ami-03c4a26550b802f69
+    register: ami_find
+  - name: print default subnet info
+    ansible.builtin.debug:
+      msg: "{{ ami_find }}" 
+  - name: ec2 security group
+    amazon.aws.ec2_group:
+      name: base_security_group
+      description: Base Security Group
+      vpc_id: "{{vpc_net_find.vpcs[0].vpc_id}}"
+      region: eu-west-1
+      rules:
+        - proto: tcp
+          from_port: 80
+          to_port: 80
+          cidr_ip: 0.0.0.0/0
+        - proto: icmp
+          from_port: 0
+          to_port: 0
+          cidr_ip: 0.0.0.0/0
+        - proto: tcp
+          from_port: 22
+          to_port: 22
+          cidr_ip: 0.0.0.0/0
+        - proto: tcp
+          from_port: 443
+          to_port: 443
+          cidr_ip: 0.0.0.0/0 
+        - proto: tcp
+          from_port: 5000
+          to_port: 5000
+          cidr_ip: 0.0.0.0/0
+  - name: Launch EC2 Instance
+    amazon.aws.ec2:
+      image: "{{ ami_find.images[0].image_id }}"
+      instance_type: t2.micro
+      instance_tags: 
+        Name: docker-private-registry
+      key_name: "{{ ec2_key_name }}" 
+      vpc_subnet_id: "{{vpc_subnet_find.subnets[0].id}}"
+      group: base_security_group
+      count_tag:
+        Name: docker-private-registry
+      exact_count: 1
+      assign_public_ip: no
+      wait: yes
+    register: created_instances
+  - name: print created_instances info
+    ansible.builtin.debug:
+      msg: "{{ created_instances }}"
+  - name: allocate a new elastic IP and associate it with an instance
+    community.aws.ec2_eip:
+      region: eu-west-1
+      state: present
+      tag_name: registry_eip
+      in_vpc: true
+      reuse_existing_ip_allowed: yes
+      device_id: "{{ created_instances.tagged_instances[0].id }}"
+    register: created_ec2_associate_eip
+  - name: print created_instances info
+    ansible.builtin.debug:
+      msg: "{{ created_ec2_associate_eip }}"
+  - name: add new ec2 hosts
+    ansible.builtin.add_host:
+      name: "{{ created_ec2_associate_eip.public_ip }}"
+      groups: ec2hosts
+  - name: Sleep for 30 seconds and continue with play
+    wait_for:
+      timeout: 30
+    delegate_to: localhost
+  
